@@ -1714,7 +1714,8 @@ int dhcpv6_promote_server_cand(void)
 		dhcpv6_retx[DHCPV6_MSG_SOLICIT].max_timeo = cand->sol_max_rt;
 		dhcpv6_retx[DHCPV6_MSG_INFO_REQ].max_timeo = cand->inf_max_rt;
 
-		return dhcpv6_request(DHCPV6_MSG_SOLICIT);
+		dhcpv6_set_state(DHCPV6_SOLICIT);
+		return -1;
 	}
 
 	hdr[0] = htons(DHCPV6_OPT_SERVERID);

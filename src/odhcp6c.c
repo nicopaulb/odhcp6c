@@ -184,7 +184,8 @@ int main(_unused int argc, char* const argv[])
 	int verbosity = 0;
 	bool help = false, daemonize = false;
 	int logopt = LOG_PID;
-	int c, res;
+	int c;
+	int res = -1;
 	unsigned int client_options = DHCPV6_CLIENT_FQDN | DHCPV6_ACCEPT_RECONFIGURE;
 	unsigned int ra_options = RA_RDNSS_DEFAULT_LIFETIME;
 	unsigned int ra_holdoff_interval = RA_MIN_ADV_INTERVAL;
@@ -467,7 +468,7 @@ int main(_unused int argc, char* const argv[])
 	while (!signal_term) { // Main logic
 		fd_set readfds;
 		int sel_res;
-		odhcp6c_signal_process(); 
+		bool signalled = odhcp6c_signal_process(); 
 
 		switch (dhcpv6_get_state()) {
 		case DHCPV6_INIT:
@@ -508,26 +509,29 @@ int main(_unused int argc, char* const argv[])
 			break;
 		
 		case DHCPV6_REQUEST:
-			do {
-				res = dhcpv6_request(mode == DHCPV6_STATELESS ?
-						DHCPV6_MSG_INFO_REQ : DHCPV6_MSG_REQUEST);
-				bool signalled = odhcp6c_signal_process();
+			msg_type = (mode == DHCPV6_STATELESS) ? DHCPV6_MSG_INFO_REQ : DHCPV6_MSG_REQUEST;
+			dhcpv6_send_request(msg_type);
+			dhcpv6_set_state(DHCPV6_REQUEST_PROCESSING);
+			break;
 
-				if (res > 0)
-					break;
-				else if (signalled) {
-					mode = -1;
-					break;
-				}
+		case DHCPV6_REQUEST_PROCESSING:
+			res = dhcpv6_state_processing(msg_type);
+			break;
 
-				mode = dhcpv6_promote_server_cand();
-			} while (mode > DHCPV6_UNKNOWN);
-
-			if (mode < 0){
-				dhcpv6_set_state(DHCPV6_INIT);
-				continue;
+		case DHCPV6_REPLY:
+			if ((res > 0) && mode != DHCPV6_UNKNOWN) {
+				dhcpv6_set_state(DHCPV6_BOUND);
+				break;
 			}
-			dhcpv6_set_state(DHCPV6_REQUEST);
+
+			if ((res < 0) && signalled) {
+				mode = DHCPV6_UNKNOWN;
+				dhcpv6_set_state(DHCPV6_INIT);
+				break;
+			}
+
+			mode = dhcpv6_promote_server_cand();
+			dhcpv6_set_state(mode > DHCPV6_UNKNOWN ? DHCPV6_REQUEST : DHCPV6_INIT);
 			break;
 
 		case DHCPV6_BOUND:
