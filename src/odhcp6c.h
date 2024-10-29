@@ -152,6 +152,16 @@ enum dhcpv6_msg {
 	_DHCPV6_MSG_MAX
 };
 
+enum dhcpv6_state {
+	DHCPV6_INIT,
+  	DHCPV6_SOLICIT,
+	DHCPV6_SOLICIT_PROCESSING,     	
+	DHCPV6_ADVERT,
+    	DHCPV6_REQUEST,  		
+    	DHCPV6_BOUND,
+	DHCPV6_EXIT  		
+};
+
 enum dhcpv6_status {
 	DHCPV6_Success = 0,
 	DHCPV6_UnspecFail = 1,
@@ -408,6 +418,10 @@ int dhcpv6_poll_reconfigure(void);
 int dhcpv6_promote_server_cand(void);
 int dhcpv6_send_request(enum dhcpv6_msg type);
 int dhcpv6_receive_response(enum dhcpv6_msg type);
+enum dhcpv6_state dhcpv6_get_state(void);
+void dhcpv6_set_state(enum dhcpv6_state state);
+int dhcpv6_get_socket(void);
+int dhcpv6_state_processing(enum dhcpv6_msg type);
 
 int init_rtnetlink(void);
 int set_rtnetlink_addr(int ifindex, const struct in6_addr *addr,

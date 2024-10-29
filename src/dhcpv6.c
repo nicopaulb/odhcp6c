@@ -109,6 +109,9 @@ static bool accept_reconfig = false;
 // Server unicast address
 static struct in6_addr server_addr = IN6ADDR_ANY_INIT;
 
+// Initial state of the dhcpv6
+static enum dhcpv6_state dhcpv6_state = DHCPV6_INIT;
+
 // Reconfigure key
 static uint8_t reconf_key[16];
 
@@ -209,6 +212,21 @@ static int fd_set_nonblocking(int sockfd)
     }
 
     return 0;
+}
+
+int dhcpv6_get_socket(void)
+{
+	return sock;
+}
+
+enum dhcpv6_state dhcpv6_get_state(void)
+{
+	return dhcpv6_state;
+}
+
+void dhcpv6_set_state(enum dhcpv6_state state)
+{
+    dhcpv6_state = state;
 }
 
 int init_dhcpv6(const char *ifname, unsigned int options, int sk_prio, int sol_timeout, unsigned int dscp)
@@ -1867,4 +1885,30 @@ int dhcpv6_receive_response(enum dhcpv6_msg type)
 		retx->round_end = 1000 + retx->round_start;
 
 	return retx->reply_ret;
+}
+
+int dhcpv6_state_processing(enum dhcpv6_msg type)
+{
+	struct dhcpv6_retx *retx = &dhcpv6_retx[type];
+	int ret = retx->reply_ret;
+	retx->round_start = odhcp6c_get_milli_time();
+	uint64_t elapsed = retx->round_start - retx->start;
+
+	if (retx->round_start >= retx->round_end || ret >=0 ) {
+		enum dhcpv6_state state = dhcpv6_get_state();
+
+		if (retx->handler_finish)
+			ret = retx->handler_finish();
+		
+		if (ret < 0 && ((retx->timeout == UINT32_MAX) || (elapsed / 1000 < retx->timeout)) &&
+			(!retx->max_rc || retx->rc < retx->max_rc)) {
+				retx->reply_ret = -1;
+				dhcpv6_set_state(state - 1);
+		} else {
+			retx->is_retransmit = false;
+			dhcpv6_set_state(state + 1);
+		}
+	}
+
+	return ret;
 }

@@ -31,6 +31,7 @@
 
 #include <net/if.h>
 #include <sys/syscall.h>
+#include <sys/select.h>
 #include <arpa/inet.h>
 #include <linux/if_addr.h>
 
@@ -459,155 +460,209 @@ int main(_unused int argc, char* const argv[])
 	}
 
 	script_call("started", 0, false);
+	int dhcpv6_socket = dhcpv6_get_socket();
+	int mode = DHCPV6_UNKNOWN;
+	enum dhcpv6_msg msg_type = DHCPV6_MSG_UNKNOWN;
 
 	while (!signal_term) { // Main logic
-		odhcp6c_clear_state(STATE_SERVER_ID);
-		odhcp6c_clear_state(STATE_SERVER_ADDR);
-		odhcp6c_clear_state(STATE_IA_NA);
-		odhcp6c_clear_state(STATE_IA_PD);
-		odhcp6c_clear_state(STATE_SNTP_IP);
-		odhcp6c_clear_state(STATE_NTP_IP);
-		odhcp6c_clear_state(STATE_NTP_FQDN);
-		odhcp6c_clear_state(STATE_SIP_IP);
-		odhcp6c_clear_state(STATE_SIP_FQDN);
-		bound = false;
+		fd_set readfds;
+		int sel_res;
+		odhcp6c_signal_process(); 
 
-		syslog(LOG_NOTICE, "(re)starting transaction on %s", ifname);
+		switch (dhcpv6_get_state()) {
+		case DHCPV6_INIT:
+			odhcp6c_clear_state(STATE_SERVER_ID);
+			odhcp6c_clear_state(STATE_SERVER_ADDR);
+			odhcp6c_clear_state(STATE_IA_NA);
+			odhcp6c_clear_state(STATE_IA_PD);
+			odhcp6c_clear_state(STATE_SNTP_IP);
+			odhcp6c_clear_state(STATE_NTP_IP);
+			odhcp6c_clear_state(STATE_NTP_FQDN);
+			odhcp6c_clear_state(STATE_SIP_IP);
+			odhcp6c_clear_state(STATE_SIP_FQDN);
+			bound = false;
 
-		signal_usr1 = signal_usr2 = false;
-		int mode = dhcpv6_set_ia_mode(ia_na_mode, ia_pd_mode, stateful_only_mode);
-		if (mode != DHCPV6_STATELESS)
-			mode = dhcpv6_request(DHCPV6_MSG_SOLICIT);
+			syslog(LOG_NOTICE, "(re)starting transaction on %s", ifname);
 
-		odhcp6c_signal_process();
-
-		if (mode < 0)
-			continue;
-
-		do {
-			res = dhcpv6_request(mode == DHCPV6_STATELESS ?
-					DHCPV6_MSG_INFO_REQ : DHCPV6_MSG_REQUEST);
-			bool signalled = odhcp6c_signal_process();
-
-			if (res > 0)
-				break;
-			else if (signalled) {
-				mode = -1;
-				break;
-			}
-
-			mode = dhcpv6_promote_server_cand();
-		} while (mode > DHCPV6_UNKNOWN);
-
-		if (mode < 0)
-			continue;
-
-		switch (mode) {
-		case DHCPV6_STATELESS:
-			bound = true;
-			syslog(LOG_NOTICE, "entering stateless-mode on %s", ifname);
-
-			while (!signal_usr2 && !signal_term) {
-				signal_usr1 = false;
-				script_call("informed", script_sync_delay, true);
-
-				res = dhcpv6_poll_reconfigure();
-				odhcp6c_signal_process();
-
-				if (res > 0)
-					continue;
-
-				if (signal_usr1) {
-					signal_usr1 = false; // Acknowledged
-					continue;
-				}
-
-				if (signal_usr2 || signal_term)
-					break;
-
-				res = dhcpv6_request(DHCPV6_MSG_INFO_REQ);
-				odhcp6c_signal_process();
-
-				if (signal_usr1)
-					continue;
-				else if (res < 0)
-					break;
-			}
+			signal_usr1 = signal_usr2 = false;
+			dhcpv6_set_state(DHCPV6_SOLICIT);
 			break;
 
-		case DHCPV6_STATEFUL:
-			bound = true;
-			script_call("bound", script_sync_delay, true);
-			syslog(LOG_NOTICE, "entering stateful-mode on %s", ifname);
+		case DHCPV6_SOLICIT:
+			mode = dhcpv6_set_ia_mode(ia_na_mode, ia_pd_mode, stateful_only_mode);
+			if(mode != DHCPV6_STATELESS){
+				msg_type = DHCPV6_MSG_SOLICIT;
+				dhcpv6_send_request(msg_type);
+			}
 
-			while (!signal_usr2 && !signal_term) {
-				// Renew Cycle
-				// Wait for T1 to expire or until we get a reconfigure
-				res = dhcpv6_poll_reconfigure();
-				odhcp6c_signal_process();
-				if (res > 0) {
-					script_call("updated", 0, false);
-					continue;
-				}
+			dhcpv6_set_state(mode != DHCPV6_STATELESS ?
+				DHCPV6_SOLICIT_PROCESSING : DHCPV6_REQUEST);
+			break;
 
-				// Handle signal, if necessary
-				if (signal_usr1)
-					signal_usr1 = false; // Acknowledged
-
-				if (signal_usr2 || signal_term)
-					break; // Other signal type
-
-				// Send renew as T1 expired
-				res = dhcpv6_request(DHCPV6_MSG_RENEW);
-				odhcp6c_signal_process();
-
-				if (res > 0) { // Renew was succesfull
-					// Publish updates
-					script_call("updated", 0, false);
-					continue; // Renew was successful
-				}
-
-				odhcp6c_clear_state(STATE_SERVER_ID); // Remove binding
-				odhcp6c_clear_state(STATE_SERVER_ADDR);
-
-				size_t ia_pd_len, ia_na_len;
-				odhcp6c_get_state(STATE_IA_PD, &ia_pd_len);
-				odhcp6c_get_state(STATE_IA_NA, &ia_na_len);
-
-				if (ia_pd_len == 0 && ia_na_len == 0)
-					break;
-
-				// If we have IAs, try rebind otherwise restart
-				res = dhcpv6_request(DHCPV6_MSG_REBIND);
-				odhcp6c_signal_process();
+		case DHCPV6_SOLICIT_PROCESSING:
+			mode = dhcpv6_state_processing(msg_type);
+			break;
+		
+		case DHCPV6_ADVERT:
+                        dhcpv6_set_state(mode > DHCPV6_UNKNOWN ? DHCPV6_REQUEST : DHCPV6_INIT);
+			break;
+		
+		case DHCPV6_REQUEST:
+			do {
+				res = dhcpv6_request(mode == DHCPV6_STATELESS ?
+						DHCPV6_MSG_INFO_REQ : DHCPV6_MSG_REQUEST);
+				bool signalled = odhcp6c_signal_process();
 
 				if (res > 0)
-					script_call("rebound", 0, true);
-				else
 					break;
+				else if (signalled) {
+					mode = -1;
+					break;
+				}
+
+				mode = dhcpv6_promote_server_cand();
+			} while (mode > DHCPV6_UNKNOWN);
+
+			if (mode < 0){
+				dhcpv6_set_state(DHCPV6_INIT);
+				continue;
 			}
+			dhcpv6_set_state(DHCPV6_REQUEST);
+			break;
+
+		case DHCPV6_BOUND:
+			switch (mode) {
+			case DHCPV6_STATELESS:
+				bound = true;
+				syslog(LOG_NOTICE, "entering stateless-mode on %s", ifname);
+
+				while (!signal_usr2 && !signal_term) {
+					signal_usr1 = false;
+					script_call("informed", script_sync_delay, true);
+
+					res = dhcpv6_poll_reconfigure();
+					odhcp6c_signal_process();
+
+					if (res > 0)
+						continue;
+
+					if (signal_usr1) {
+						signal_usr1 = false; // Acknowledged
+						continue;
+					}
+
+					if (signal_usr2 || signal_term)
+						break;
+
+					res = dhcpv6_request(DHCPV6_MSG_INFO_REQ);
+					odhcp6c_signal_process();
+
+					if (signal_usr1)
+						continue;
+					else if (res < 0)
+						break;
+				}
+				dhcpv6_set_state(DHCPV6_EXIT);
+				break;
+
+			case DHCPV6_STATEFUL:
+				bound = true;
+				script_call("bound", script_sync_delay, true);
+				syslog(LOG_NOTICE, "entering stateful-mode on %s", ifname);
+
+				while (!signal_usr2 && !signal_term) {
+					// Renew Cycle
+					// Wait for T1 to expire or until we get a reconfigure
+					res = dhcpv6_poll_reconfigure();
+					odhcp6c_signal_process();
+					if (res > 0) {
+						script_call("updated", 0, false);
+						continue;
+					}
+
+					// Handle signal, if necessary
+					if (signal_usr1)
+						signal_usr1 = false; // Acknowledged
+
+					if (signal_usr2 || signal_term)
+						break; // Other signal type
+
+					// Send renew as T1 expired
+					res = dhcpv6_request(DHCPV6_MSG_RENEW);
+					odhcp6c_signal_process();
+
+					if (res > 0) { // Renew was succesfull
+						// Publish updates
+						script_call("updated", 0, false);
+						continue; // Renew was successful
+					}
+
+					odhcp6c_clear_state(STATE_SERVER_ID); // Remove binding
+					odhcp6c_clear_state(STATE_SERVER_ADDR);
+
+					size_t ia_pd_len, ia_na_len;
+					odhcp6c_get_state(STATE_IA_PD, &ia_pd_len);
+					odhcp6c_get_state(STATE_IA_NA, &ia_na_len);
+
+					if (ia_pd_len == 0 && ia_na_len == 0)
+						break;
+
+					// If we have IAs, try rebind otherwise restart
+					res = dhcpv6_request(DHCPV6_MSG_REBIND);
+					odhcp6c_signal_process();
+
+					if (res > 0)
+						script_call("rebound", 0, true);
+					else
+						break;
+				}
+				dhcpv6_set_state(DHCPV6_EXIT);
+				break;
+
+			default:
+				dhcpv6_set_state(DHCPV6_EXIT);
+				break;
+			}
+			break;
+		
+		case DHCPV6_EXIT:
+			signal_term = true;
+			odhcp6c_expire(false);
+
+			size_t ia_pd_len, ia_na_len, server_id_len;
+			odhcp6c_get_state(STATE_IA_PD, &ia_pd_len);
+			odhcp6c_get_state(STATE_IA_NA, &ia_na_len);
+			odhcp6c_get_state(STATE_SERVER_ID, &server_id_len);
+
+			// Add all prefixes to lost prefixes
+			bound = false;
+			script_call("unbound", 0, true);
+
+			if (server_id_len > 0 && (ia_pd_len > 0 || ia_na_len > 0) && release)
+				dhcpv6_send_request(DHCPV6_MSG_RELEASE);
+
+			odhcp6c_clear_state(STATE_IA_NA);
+			odhcp6c_clear_state(STATE_IA_PD);
 			break;
 
 		default:
 			break;
 		}
 
-		odhcp6c_expire(false);
+		//Read the sockets
+		struct timeval tv;
+		tv.tv_sec = 0;  
+		tv.tv_usec = 0; 
+		FD_ZERO(&readfds);
+		FD_SET(dhcpv6_socket, &readfds);
+		sel_res = select(dhcpv6_socket + 1, &readfds, NULL, NULL, &tv);
+		if (sel_res == -1 && errno == EINTR) {
+			continue;
+		}
 
-		size_t ia_pd_len, ia_na_len, server_id_len;
-		odhcp6c_get_state(STATE_IA_PD, &ia_pd_len);
-		odhcp6c_get_state(STATE_IA_NA, &ia_na_len);
-		odhcp6c_get_state(STATE_SERVER_ID, &server_id_len);
+		if (FD_ISSET(dhcpv6_socket, &readfds))
+			dhcpv6_receive_response(msg_type);
 
-		// Add all prefixes to lost prefixes
-		bound = false;
-		script_call("unbound", 0, true);
-
-		if (server_id_len > 0 && (ia_pd_len > 0 || ia_na_len > 0) && release)
-			dhcpv6_request(DHCPV6_MSG_RELEASE);
-
-		odhcp6c_clear_state(STATE_IA_NA);
-		odhcp6c_clear_state(STATE_IA_PD);
 	}
 
 	script_call("stopped", 0, true);
