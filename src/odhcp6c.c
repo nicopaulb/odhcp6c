@@ -501,7 +501,7 @@ int main(_unused int argc, char* const argv[])
 	nfds++;
 #endif
 
-	script_call("started", 0, false);
+	notify_state_change("started", 0, false);
 
 	while (!terminate) { // Main logic
 		int poll_res;
@@ -576,9 +576,9 @@ int main(_unused int argc, char* const argv[])
 				if (mode == DHCPV6_STATELESS) {
 					syslog(LOG_NOTICE, "entering stateless-mode on %s", ifname);
 					signal_usr1 = false;
-					script_call("informed", script_sync_delay, true);
+					notify_state_change("informed", script_sync_delay, true);
 				} else {
-					script_call("bound", script_sync_delay, true);
+					notify_state_change("bound", script_sync_delay, true);
 					syslog(LOG_NOTICE, "entering stateful-mode on %s", ifname);
 				}
 			}
@@ -605,7 +605,7 @@ int main(_unused int argc, char* const argv[])
 			if (res > 0) {
 				dhcpv6_set_state(DHCPV6_BOUND);
 				if (mode == DHCPV6_STATEFUL)
-					script_call("updated", 0, false);
+					notify_state_change("updated", 0, false);
 			} else {
 				dhcpv6_set_state(mode == DHCPV6_STATELESS ? DHCPV6_INFO : DHCPV6_RENEW);
 			}
@@ -618,7 +618,7 @@ int main(_unused int argc, char* const argv[])
 		
 		case DHCPV6_RENEW_REPLY:
 			if (res > 0 ) {
-				script_call("updated", 0, false);
+				notify_state_change("updated", 0, false);
 				dhcpv6_set_state(DHCPV6_BOUND);
 			} else {
 				dhcpv6_set_state(DHCPV6_REBIND);
@@ -647,7 +647,7 @@ int main(_unused int argc, char* const argv[])
 			if (res < 0) {
 				dhcpv6_set_state(DHCPV6_EXIT);
 			} else {
-				script_call("rebound", 0, true);
+				notify_state_change("rebound", 0, true);
 				dhcpv6_set_state(DHCPV6_BOUND);
 			}
 			break;
@@ -692,7 +692,7 @@ int main(_unused int argc, char* const argv[])
 
 			// Add all prefixes to lost prefixes
 			bound = false;
-			script_call("unbound", 0, true);
+			notify_state_change("unbound", 0, true);
 
 			if (server_id_len > 0 && (ia_pd_len > 0 || ia_na_len > 0) && release)
 				dhcpv6_send_request(DHCPV6_MSG_RELEASE);
@@ -725,11 +725,13 @@ int main(_unused int argc, char* const argv[])
 		if (fds[1].revents & POLLIN)
 			ubus_handle_event(ubus);
 	}
-	script_call("stopped", 0, true);
+
+	notify_state_change("stopped", 0, true);
 	ubus_destroy(ubus);
 #else
 	}
-	script_call("stopped", 0, true);
+	
+	notify_state_change("stopped", 0, true);
 #endif
 
 	return 0;
@@ -819,7 +821,7 @@ bool odhcp6c_signal_process(void)
 		}
 
 		if (ra_updated && (bound || allow_slaac_only >= 0)) {
-			script_call("ra-updated", (!ra && !bound) ?
+			notify_state_change("ra-updated", (!ra && !bound) ?
 					script_sync_delay : script_accu_delay, false);
 			ra = true;
 		}
@@ -1375,4 +1377,12 @@ static int parse_opt(const char *opt)
 	free(payload);
 
 	return ret;
+}
+
+void notify_state_change(const char *status, int delay, bool resume)
+{
+	script_call(status, delay, resume);
+#ifdef HAVE_UBUS
+	ubus_dhcp_event(status);
+#endif
 }
