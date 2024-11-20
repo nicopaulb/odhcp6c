@@ -31,7 +31,7 @@
 
 #include <net/if.h>
 #include <sys/syscall.h>
-#include <sys/select.h>
+#include <poll.h>
 #include <arpa/inet.h>
 #include <linux/if_addr.h>
 
@@ -460,14 +460,26 @@ int main(_unused int argc, char* const argv[])
 		}
 	}
 
-	script_call("started", 0, false);
+	struct pollfd fds[2] = {0};
+	int nfds = 0;
+
 	int dhcpv6_socket = dhcpv6_get_socket();
 	int mode = DHCPV6_UNKNOWN;
 	enum dhcpv6_msg msg_type = DHCPV6_MSG_UNKNOWN;
 
+	if (dhcpv6_socket < 0) {
+		syslog(LOG_ERR, "Invalid dhcpv6 file descriptor");
+		return 1;
+	}
+	
+	fds[nfds].fd = dhcpv6_socket;
+	fds[nfds].events = POLLIN;
+	nfds++;
+
+	script_call("started", 0, false);
+
 	while (!signal_term) { // Main logic
-		fd_set readfds;
-		int sel_res;
+		int poll_res;
 		bool signalled = odhcp6c_signal_process(); 
 
 		switch (dhcpv6_get_state()) {
@@ -670,22 +682,16 @@ int main(_unused int argc, char* const argv[])
 			break;
 		}
 
-		//Read the sockets
-		struct timeval tv;
-		tv.tv_sec = 0;  
-		tv.tv_usec = 0; 
-		FD_ZERO(&readfds);
-		FD_SET(dhcpv6_socket, &readfds);
-		sel_res = select(dhcpv6_socket + 1, &readfds, NULL, NULL, &tv);
-		if (sel_res == -1 && errno == EINTR) {
+		poll_res = poll(fds, nfds, dhcpv6_get_state_timeout());
+		dhcpv6_reset_state_timeout();
+		if (poll_res == -1 && (errno == EINTR || errno == EAGAIN)) {
 			continue;
 		}
 
-		if (FD_ISSET(dhcpv6_socket, &readfds))
+		if (fds[0].revents & POLLIN)
 			dhcpv6_receive_response(msg_type);
 
 	}
-
 	script_call("stopped", 0, true);
 
 	return 0;

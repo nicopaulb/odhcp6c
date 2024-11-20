@@ -111,6 +111,7 @@ static struct in6_addr server_addr = IN6ADDR_ANY_INIT;
 
 // Initial state of the dhcpv6
 static enum dhcpv6_state dhcpv6_state = DHCPV6_INIT;
+static int dhcpv6_state_timeout = 0;
 
 // Reconfigure key
 static uint8_t reconf_key[16];
@@ -129,11 +130,13 @@ static uint32_t ntohl_unaligned(const uint8_t *data)
 static void dhcpv6_next_state(void)
 {
 	dhcpv6_state++;
+	dhcpv6_reset_state_timeout();
 }
 
 static void dhcpv6_prev_state(void)
 {
 	dhcpv6_state--;
+	dhcpv6_reset_state_timeout();
 }
 
 static char *dhcpv6_msg_to_str(enum dhcpv6_msg msg)
@@ -236,7 +239,25 @@ enum dhcpv6_state dhcpv6_get_state(void)
 
 void dhcpv6_set_state(enum dhcpv6_state state)
 {
-    dhcpv6_state = state;
+	dhcpv6_state = state;
+	dhcpv6_reset_state_timeout();
+}
+
+int dhcpv6_get_state_timeout(void)
+{
+	return dhcpv6_state_timeout;
+}
+
+void dhcpv6_set_state_timeout(int timeout)
+{
+	if(timeout > 0 && (dhcpv6_state_timeout == 0 || timeout < dhcpv6_state_timeout)) {
+		dhcpv6_state_timeout = timeout;
+	}
+}
+
+void dhcpv6_reset_state_timeout(void)
+{
+	dhcpv6_state_timeout = 0;
 }
 
 int init_dhcpv6(const char *ifname, unsigned int options, int sk_prio, int sol_timeout, unsigned int dscp)
@@ -1588,15 +1609,20 @@ int dhcpv6_promote_server_cand(void)
 int dhcpv6_send_request(enum dhcpv6_msg type)
 {
 	struct dhcpv6_retx *retx = &dhcpv6_retx[type];
+	uint64_t current_milli_time = 0;
 
 	if (retx->delay ) {
 		if (retx->delay_msec == 0) {
 			retx->delay_msec = (dhcpv6_rand_delay((10000 * DHCPV6_REQ_DELAY) / 2) + (1000 * DHCPV6_REQ_DELAY) / 2);
+			dhcpv6_set_state_timeout(retx->delay_msec);
 			retx->delay_msec += odhcp6c_get_milli_time();
 			return 1;
 		} else {
-			if (odhcp6c_get_milli_time() < retx->delay_msec)
+			current_milli_time = odhcp6c_get_milli_time();
+			if (current_milli_time < retx->delay_msec) {
+				dhcpv6_set_state_timeout(retx->delay_msec - current_milli_time);
 				return 1;
+			}
 			retx->delay_msec = 0;
 		}
 	}
@@ -1653,6 +1679,8 @@ int dhcpv6_send_request(enum dhcpv6_msg type)
 	// Don't wait too long if timeout differs from infinite
 	if ((retx->timeout != UINT32_MAX) && (retx->round_end - retx->start > retx->timeout * 1000))
 		retx->round_end = retx->timeout * 1000 + retx->start;
+
+	dhcpv6_set_state_timeout(retx->round_end - odhcp6c_get_milli_time());
 
 	// Built and send package
 	switch (type) {
@@ -1758,6 +1786,9 @@ int dhcpv6_state_processing(enum dhcpv6_msg type)
 			retx->is_retransmit = false;
 			dhcpv6_next_state();
 		}
+	}
+	else{
+		dhcpv6_set_state_timeout(retx->round_end - retx->round_start);
 	}
 
 	return ret;

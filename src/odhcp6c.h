@@ -437,6 +437,9 @@ enum dhcpv6_state dhcpv6_get_state(void);
 void dhcpv6_set_state(enum dhcpv6_state state);
 int dhcpv6_get_socket(void);
 int dhcpv6_state_processing(enum dhcpv6_msg type);
+int dhcpv6_get_state_timeout(void);
+void dhcpv6_set_state_timeout(int timeout);
+void dhcpv6_reset_state_timeout(void);
 
 int init_rtnetlink(void);
 int set_rtnetlink_addr(int ifindex, const struct in6_addr *addr,
