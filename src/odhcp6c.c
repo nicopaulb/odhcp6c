@@ -190,6 +190,7 @@ int main(_unused int argc, char* const argv[])
 	unsigned int ra_options = RA_RDNSS_DEFAULT_LIFETIME;
 	unsigned int ra_holdoff_interval = RA_MIN_ADV_INTERVAL;
 	unsigned int dscp = 0;
+	bool terminate = false;
 
 	while ((c = getopt(argc, argv, "S::DN:V:P:FB:c:i:r:Ru:Ux:s:kK:t:C:m:Lhedp:fav")) != -1) {
 		switch (c) {
@@ -478,7 +479,7 @@ int main(_unused int argc, char* const argv[])
 
 	script_call("started", 0, false);
 
-	while (!signal_term) { // Main logic
+	while (!terminate) { // Main logic
 		int poll_res;
 		bool signalled = odhcp6c_signal_process(); 
 
@@ -638,28 +639,26 @@ int main(_unused int argc, char* const argv[])
 
 		case DHCPV6_BOUND_PROCESSING:
 		case DHCPV6_RECONF_PROCESSING:
-		case DHCPV6_RENEW_PROCESSING:
 		case DHCPV6_REBIND_PROCESSING:
 			res = dhcpv6_state_processing(msg_type);
+
 			if (signal_usr1)
-				signal_usr1 = false;   // Acknowledged
-			
-			if (mode == DHCPV6_STATELESS)
-				dhcpv6_set_state(DHCPV6_BOUND);
-			else if (signal_usr2 || signal_term)
+				dhcpv6_set_state(mode == DHCPV6_STATELESS ? DHCPV6_INFO : DHCPV6_RENEW);
+			if (signal_usr2 || signal_term)
 				dhcpv6_set_state(DHCPV6_EXIT);
 			break;
 		
+		case DHCPV6_RENEW_PROCESSING:
 		case DHCPV6_INFO_PROCESSING:
 			res = dhcpv6_state_processing(msg_type);
+
 			if (signal_usr1)
-				dhcpv6_set_state(DHCPV6_BOUND);
-			else if (signal_usr2 || signal_term)
+				signal_usr1 = false;   // Acknowledged
+			if (signal_usr2 || signal_term)
 				dhcpv6_set_state(DHCPV6_EXIT);
 			break;
 		
 		case DHCPV6_EXIT:
-			signal_term = true;
 			odhcp6c_expire(false);
 
 			size_t ia_pd_len, ia_na_len, server_id_len;
@@ -676,6 +675,13 @@ int main(_unused int argc, char* const argv[])
 
 			odhcp6c_clear_state(STATE_IA_NA);
 			odhcp6c_clear_state(STATE_IA_PD);
+
+			if (!signal_usr2) {
+				terminate = true;
+			} else {
+				signal_usr2 = false;
+				dhcpv6_set_state(DHCPV6_INIT);
+			}
 			break;
 
 		default:
