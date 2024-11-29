@@ -537,21 +537,19 @@ int main(_unused int argc, char* const argv[])
 			dhcpv6_send_request(msg_type);		
 			break;
 
-		case DHCPV6_SOLICIT_PROCESSING:
-			mode = dhcpv6_state_processing(msg_type);
-			break;
-		
 		case DHCPV6_ADVERT:
-                        dhcpv6_set_state(mode > DHCPV6_UNKNOWN ? DHCPV6_REQUEST : DHCPV6_INIT);
+			if(res > 0) {
+				mode = DHCPV6_STATEFUL;
+				dhcpv6_set_state(DHCPV6_REQUEST);
+			} else {
+				mode = DHCPV6_UNKNOWN;
+				dhcpv6_set_state(DHCPV6_INIT);
+			}
 			break;
-		
+
 		case DHCPV6_REQUEST:
 			msg_type = (mode == DHCPV6_STATELESS) ? DHCPV6_MSG_INFO_REQ : DHCPV6_MSG_REQUEST;
 			dhcpv6_send_request(msg_type);
-			break;
-
-		case DHCPV6_REQUEST_PROCESSING:
-			res = dhcpv6_state_processing(msg_type);
 			break;
 
 		case DHCPV6_REPLY:
@@ -659,6 +657,14 @@ int main(_unused int argc, char* const argv[])
 		
 		case DHCPV6_INFO_REPLY:
 			dhcpv6_set_state(res < 0 ? DHCPV6_EXIT : DHCPV6_BOUND);
+			break;
+
+		case DHCPV6_SOLICIT_PROCESSING:
+		case DHCPV6_REQUEST_PROCESSING:
+			res = dhcpv6_state_processing(msg_type);
+
+			if (signal_usr2 || signal_term)
+				dhcpv6_set_state(DHCPV6_EXIT);
 			break;
 
 		case DHCPV6_BOUND_PROCESSING:
