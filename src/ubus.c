@@ -306,7 +306,7 @@ static int entry_to_blob(const char *name, const void *data, size_t len, enum en
 				blobmsg_add_u16(&b, "priority", e[i].priority);
 			} else {
 				blobmsg_add_u32(&b, "valid", e[i].valid);
-				blobmsg_add_u16(&b, "priority", e[i].priority);
+				blobmsg_add_u32(&b, "preferred", e[i].preferred);
 				blobmsg_add_u32(&b, "t1", e[i].t1);
 				blobmsg_add_u32(&b, "t2", e[i].t2);
 			}
@@ -321,6 +321,7 @@ static int entry_to_blob(const char *name, const void *data, size_t len, enum en
 				CHECK_ALLOC(buf);
 				inet_ntop(AF_INET6, &e[i].router, buf, INET6_ADDRSTRLEN);
 				blobmsg_add_string_buffer(&b);
+				blobmsg_add_u16(&b, "excluded_length", e[i].priority);
 			}
 		}
 
