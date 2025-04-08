@@ -355,7 +355,7 @@ int main(_unused int argc, char* const argv[])
 			break;
 
 		case 't':
-			config_set_rtx_timeout_init(CONFIG_DHCP_SOLICIT, atoi(optarg));
+			config_set_rtx_timeout_max(CONFIG_DHCP_SOLICIT, atoi(optarg));
 			break;
 
 		case 'C':
