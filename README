@@ -1,5 +1,11 @@
 odhcp6c - Embedded DHCPv6 Client
 
+FORK OF https://git.openwrt.org/?p=project/odhcp6c.git.
+
+- Adding UBUS integration.
+- Retransmission parameters.
+
+-------------------------------------------------------
 
 ** Abstract **
 
