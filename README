@@ -5,6 +5,9 @@ FORK OF https://git.openwrt.org/?p=project/odhcp6c.git.
 - Adding UBUS integration.
 - Retransmission parameters.
 
+
+UPDATE: This fork has been merged into the original odhcp6c repo. See https://github.com/openwrt/odhcp6c/pull/96 and https://github.com/openwrt/odhcp6c/pull/106.
+
 -------------------------------------------------------
 
 ** Abstract **
